@@ -129,30 +129,50 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
             self.frame = None
 
         def plot(self):
+            """
+            Plot the tracker using matplotlib.
+            """
             plt.imshow(self.roi)
             plt.show()
 
         @property
         def roi(self):
+            """
+            Get the region of the tracker.
+            :return: numpy ndarray
+            """
             bbox = self.last_bbox
             img = self.frame
             if bbox is None or img is None:
                 return None
+            # Sometimes the tracker's predicted bbox is out of the whole image.
+            # So when the pos is negative, we replace it with zero.
             top = bbox[1] if bbox[1] > 0 else 0
             left = bbox[0] if bbox[0] > 0 else 0
             return img[top:top + bbox[3], left:left + bbox[2]]
 
         def __getattr__(self, item):
+            """
+            Here we use the deep black magic of meta programming to wrap the opencv tracker.
+            By doing so, we can attach some methods and properties/fields on it.
+
+                                                                              -- kxxt, sduwh
+            """
             return self.tracker.__getattribute__(item)
 
         def __repr__(self):
+            """
+            Make it pretty! Debugger is your friend after you can pretty print annoying objects.
+            """
             return f"<Tracker {self.vehicle_id}, bbox={self.last_bbox}, failure_cnt={self.failure_cnt}, lifetime={self.lifetime}>"
 
+    # Store current trackers.
     trackers = []
 
     # Decide when should we drop a tracker.
     tracking_failure_count_upperbound = 5
 
+    # Threshold decide whether the tracker bbox and the detection bbox is the same one.
     IoU_threshold = 0.4
 
     def init_new_tracker(img, bbox, vehicle_id):
@@ -166,6 +186,7 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
         tracker = TrackerWrapper(vehicle_id)
         tracker.init(img, bbox)
         tracker.frame = img
+        # Plot the tracker. comment those if you get bothered.
         plt.imshow(img[bbox[1]:bbox[1] + bbox[3], bbox[0]:bbox[0] + bbox[2]])
         plt.show()
         return tracker
@@ -190,12 +211,15 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
                 tracker.frame = None
                 tracker.failure_cnt += 1
                 if tracker.failure_cnt > tracking_failure_count_upperbound:
+                    # If a tracker fails too many times, it's not a good tracker. Just delete it.
                     to_be_removed.append(tracker)
 
-        # Remove the useless trackers.
+        # Remove the bad trackers.
         for tracker in to_be_removed:
             print(f"Remove tracker {tracker.vehicle_id} due to too many failures.")
             trackers.remove(tracker)
+
+        # Notify us about the count of trackers we have.
         print(f"There are {len(trackers)} trackers now.")
 
     def preprocess_image(img):
@@ -204,7 +228,12 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
         :param img:
         :return: preprocess image
         """
-        return np.transpose(np.array(cv2.resize(img, (800, 800)), dtype="float32"), (2, 0, 1))[np.newaxis, :] / 255
+        return np.transpose(
+            np.array(
+                cv2.resize(img, (800, 800)),  # Resize the img to 800 * 800
+                dtype="float32"),  # Make it float, make it float!
+            (2, 0, 1)  # transpose the ndarray from (255, 255, 3) to (3, 255, 255)
+        )[np.newaxis, :] / 255  # add a new axis and normalize the image!
 
     def preprocess_vehicle_region(img):
         """
@@ -212,7 +241,12 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
         :param img: vehicle region
         :return: preprocess image
         """
-        return np.transpose(np.array(cv2.resize(img, (224, 224)), dtype="float32"), (2, 0, 1))[np.newaxis, :] / 255
+        return np.transpose(
+            np.array(
+                cv2.resize(img, (224, 224)),  # Resize the img to 224 * 224
+                dtype="float32"),  # Make it float, make it float!
+            (2, 0, 1)  # transpose the ndarray from (255, 255, 3) to (3, 255, 255)
+        )[np.newaxis, :] / 255  # add a new axis and normalize the image!
 
     def box_transform(box, h, w):
         """
@@ -233,6 +267,7 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
         :return: vehicle id of integer
         """
         nonlocal counter
+        # The code is trivial and do not need comments
         counter += 1
         return counter
 
@@ -243,6 +278,7 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
         :param box: detection bbox
         :return: vehicle id of the detected vehicle
         """
+        # Let the transform do the magic!
         tl, br = box_transform(box, img.shape[0], img.shape[1])
 
         # if not len(former_boxes):
@@ -258,14 +294,16 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
         # color = colors[ret % len(colors)]
         color = (255, 128, 0)
         cv2.rectangle(img, tl, br, color, 2)
+        # Storage the ious and corresponding indices
         ious = []
         for index, tracker in enumerate(trackers):
             if tracker.last_bbox is not None:
+                # if the tracker get something we are interested in, then dig into it.
                 bbox = tracker.last_bbox
                 ious.append(
                     (
-                        index,
-                        get_iou(
+                        index,  # Store the id since we will use it.
+                        get_iou(  # Just calculate the IoU of detection and tracking.
                             (tl[0], tl[1], br[0], br[1]),
                             (bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3])
                         )
@@ -273,30 +311,44 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
                 )
         # max_iou = -1
         # max_iou_id = None
-        indices = []
+        indices = []  # Store indices whose corresponding bbox is similar to our detection bbox
         for index, iou in ious:
             if iou > IoU_threshold:
-                indices.append(index)
-        if indices:
+                indices.append(index)  # It's apparent
+        if indices:  # If we get something
+            # Search for the tracker with the least id,
+            # it's the first tracker that get applied to the corresponding vehicle
             min_id_index = min(indices, key=lambda x: trackers[x].vehicle_id)
             min_id_tracker = trackers[min_id_index]
+            # Search for the tracker with the biggest IoU,
+            # It should replace others.
             max_iou_index = ious[max(range(len(ious)), key=lambda x: ious[x][1])][0]
             max_iou_tracker = trackers[max_iou_index]
+            # Replace max IoU tracker's id with the min id
             max_iou_tracker.vehicle_id = min_id_tracker.vehicle_id
+            # Remove trackers with smaller IoU
             trackers_to_be_removed = [trackers[x] for x in indices if x != max_iou_index]
             for tracker in trackers_to_be_removed:
                 print(f"Remove tracker {tracker.vehicle_id} due to small iou!")
                 trackers.remove(tracker)
-            vehicle_id = min_id_tracker.vehicle_id
+            vehicle_id = min_id_tracker.vehicle_id # Store the result vehicle id
         else:
+            # We didn't find any matched tracker bbox.
+            # It's probably a new vehicle!
             print(f"No iou > IoU_threshold!")
             if br[1] > 900 or br[1] < 100:
-                print(f"Currently not tracking {tl},{br} since it's at bottom")
+                # When the vehicle is at bottom or top, do not track it.
+                # If we do track it, may issues do rise!
+                print(f"Currently not tracking {tl},{br} since it's at bottom or top")
+                # The -1 id means the vehicle is detected but not currently tracked
                 vehicle_id = -1
             else:
+                # We find a new car! Give it an id!
                 vehicle_id = generate_car_id()
+                # Tracking it by adding a new tracker!
                 trackers.append(init_new_tracker(detection_frame, tlbr2xywh(tl, br), vehicle_id))
                 print(f"Detected new vehicle! id:{vehicle_id}")
+        # Draw the vehicle id!
         cv2.putText(img, str(vehicle_id), (br[0], tl[1] - 10), font, 1.2, (255, 0, 0), 1, cv2.LINE_AA)
         return vehicle_id
 
