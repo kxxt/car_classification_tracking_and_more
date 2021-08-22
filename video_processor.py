@@ -292,8 +292,8 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
         #     else:
         #         ret = min_dis_and_id[1]
         # color = colors[ret % len(colors)]
-        color = (255, 128, 0)
-        cv2.rectangle(img, tl, br, color, 2)
+        # color = (255, 128, 0)
+
         # Storage the ious and corresponding indices
         ious = []
         for index, tracker in enumerate(trackers):
@@ -331,7 +331,7 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
             for tracker in trackers_to_be_removed:
                 print(f"Remove tracker {tracker.vehicle_id} due to small iou!")
                 trackers.remove(tracker)
-            vehicle_id = min_id_tracker.vehicle_id # Store the result vehicle id
+            vehicle_id = min_id_tracker.vehicle_id  # Store the result vehicle id
         else:
             # We didn't find any matched tracker bbox.
             # It's probably a new vehicle!
@@ -348,6 +348,8 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
                 # Tracking it by adding a new tracker!
                 trackers.append(init_new_tracker(detection_frame, tlbr2xywh(tl, br), vehicle_id))
                 print(f"Detected new vehicle! id:{vehicle_id}")
+        # Make it colorful and draw it!
+        cv2.rectangle(img, tl, br, colors[vehicle_id % len(colors)], 2)
         # Draw the vehicle id!
         cv2.putText(img, str(vehicle_id), (br[0], tl[1] - 10), font, 1.2, (255, 0, 0), 1, cv2.LINE_AA)
         return vehicle_id
@@ -362,8 +364,10 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
         bbox = tracker.last_bbox
         if bbox is None:
             return
+        # Draw the tracker bbox
         cv2.rectangle(img, (bbox[0], bbox[1]), (bbox[0] + bbox[2], bbox[1] + bbox[3]), (255, 255, 255), 2)
         if tracker.vehicle_id is not None:
+            # Draw the vehicle id of the tracker
             cv2.putText(img, str(tracker.vehicle_id), (bbox[0], bbox[1] - 10), font, 1.2, (255, 255, 255), 1,
                         cv2.LINE_AA)
 
@@ -377,12 +381,18 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
         """
         tl, br = box_transform(box, detection_frame.shape[0], detection_frame.shape[1])
         vehicle_region = detection_frame[tl[1]:br[1], tl[0]:br[0]]
+        # Transform the vehicle region so that it fits the model.
         transformed = preprocess_vehicle_region(vehicle_region)
+        # Get the probabilities
         probs = car_classification_sess.run(None, {inp_car_classification: transformed})[0]
+        # The most probable category id!
         max_prob_id = np.argmax(probs)
+        # Get the category by the num <=> label mapping.
         category = num2label[max_prob_id]
         if category == "sedan":
+            # if the category is sedan, we should think twice!
             largest = np.max(probs)
+            # Find the second probable choice and compare it with sedan!
             second_largest = -1
             second_largest_id = -1
             for id in range(len(probs)):
@@ -391,7 +401,9 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
                     second_largest_id = id
                     second_largest = value
             if largest - second_largest < 0.25:
+                # if the difference is small, we take the second probable one instead!
                 category = num2label[second_largest_id]
+        # Draw the category on the video.
         cv2.putText(img, category, (tl[0], tl[1] - 10), font, 1.2, (255, 33, 100), 1, cv2.LINE_AA)
 
     def draw_license_plate(img, detection_frame, box):
@@ -403,15 +415,18 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
 
     def process(detection_frame):
         nonlocal former_frame, former_boxes
+        # transform the frame for detection.
         transformed = preprocess_image(detection_frame)
+        # Copy the frame to draw on it. (Do not mix up the draw frame and the detection frame.)
         draw_frame = detection_frame.copy()
+        # Get the results from model.
         boxes, classes, confs = car_detection_sess.run(None, {inp_car_detection: transformed})
-        normalized_boxes = (box / 800 for box in boxes)
-        infos = zip(normalized_boxes, confs)
+        normalized_boxes = (box / 800 for box in boxes)  # Normalize the bboxes
+        infos = zip(normalized_boxes, confs)  # Zip normalized boxes and their confidence values.
         # new_former_boxes = []
-        update_trackers(detection_frame)
+        update_trackers(detection_frame)  # Update all the trackers.
         for tracker in trackers:
-            draw_tracker(draw_frame, tracker)
+            draw_tracker(draw_frame, tracker)  # Visualize all the trackers。
         # out_bound_trackers = []
         # for tracker in trackers:
         #     if tracker.last_bbox is not None:
@@ -422,14 +437,18 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
         # for tracker in out_bound_trackers:
         #     trackers.remove(tracker)
         #     print(f"Remove {tracker} because it's out of bound.")
-        useless_trackers = [tracker for tracker in trackers
+        useless_trackers = [tracker for tracker in trackers  # collect useless trackers
                             if tracker.roi is not None and
+                            # We think a tracker useless when its region is almost of the same color.
+                            # The 20 threshold is just a value from my experience.
                             np.std(tracker.roi) < 20]
         for tracker in useless_trackers:
             trackers.remove(tracker)
             print(f"Remove {tracker} because it's std is too small.")
         for info in infos:
             if info[1] < confidence_lowerbound:
+                # We do not draw the detection which is below our confidence lower bound.
+                # Just break it, because the array is sorted!
                 break
             # car_id = draw_detection(draw_frame, info[0])
             draw_detection(draw_frame, info[0], detection_frame)
@@ -457,7 +476,7 @@ if __name__ == "__main__":
     frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     video_writer = cv2.VideoWriter(result_file, video_fourcc, fps_video, (frame_width, frame_height))
-    # Init inference session
+    # Init video processing session
     process = init_session()
     # Process video
     frame_id = 0
@@ -468,6 +487,7 @@ if __name__ == "__main__":
             break
         draw_frame = process(frame)
         video_writer.write(draw_frame)
+        # Uncomment those if you want the video show.
         # cv2.imshow("Video", draw_frame)
         # cv2.waitKey(20)
         frame_id += 1
