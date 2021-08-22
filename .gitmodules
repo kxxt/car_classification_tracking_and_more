@@ -1,0 +1,4 @@
+[submodule "license_recognition"]
+    path = license_recognition
+    url = https://github.com/soybeanyoyoyo/License_Recognition.git
+    branch = develop
