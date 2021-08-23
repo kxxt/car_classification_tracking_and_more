@@ -16,6 +16,9 @@ parser.add_option("-o", "--output", type="string", dest="output",
 parser.add_option("-n", "--no-license-recognition",
                   action="store_false", dest="license_recognition", default=True,
                   help="Do not perform license recognition during processing.")
+parser.add_option("-e", "--interactive",
+                  action="store_true", dest="interactive", default=False,
+                  help="Show the processed video in realtime and visualize the trackers when inited, etc.")
 
 # Define the color palette.
 colors = [
@@ -82,6 +85,81 @@ def get_iou(a, b, epsilon=1e-5):
 def tlbr2xywh(tl, br):
     return tl[0], tl[1], br[0] - tl[0], br[1] - tl[1]
 
+    # Decide the type of tracker and store trackers in a list.
+
+
+new_tracker = cv2.TrackerCSRT_create
+
+
+class TrackerWrapper:
+    """
+    Wraps the opencv tracker.
+    """
+
+    def __init__(self, vehicle_id):
+        self.tracker = new_tracker()
+        self.failure_cnt = 0
+        self.last_bbox = None
+        self.vehicle_id = vehicle_id
+        self.lifetime = 0
+        self.frame = None
+
+    def plot(self):
+        """
+        Plot the tracker using matplotlib.
+        """
+        plt.imshow(self.roi)
+        plt.show()
+
+    @property
+    def roi(self):
+        """
+        Get the region of the tracker.
+        :return: numpy ndarray
+        """
+        bbox = self.last_bbox
+        img = self.frame
+        if bbox is None or img is None:
+            return None
+        # Sometimes the tracker's predicted bbox is out of the whole image.
+        # So when the pos is negative, we replace it with zero.
+        top = bbox[1] if bbox[1] > 0 else 0
+        left = bbox[0] if bbox[0] > 0 else 0
+        return img[top:top + bbox[3], left:left + bbox[2]]
+
+    def __getattr__(self, item):
+        """
+        Here we use the deep black magic of meta programming to wrap the opencv tracker.
+        By doing so, we can attach some methods and properties/fields on it.
+
+                                                                          -- kxxt, sduwh
+        """
+        return self.tracker.__getattribute__(item)
+
+    def __repr__(self):
+        """
+        Make it pretty! Debugger is your friend after you can pretty print annoying objects.
+        """
+        return f"<Tracker {self.vehicle_id}, bbox={self.last_bbox}, failure_cnt={self.failure_cnt}, lifetime={self.lifetime}>"
+
+
+def init_new_tracker(img, bbox, vehicle_id):
+    """
+    Init new tracker with the region of img specified by the bbox.
+    :param vehicle_id: the unique id of the vehicle
+    :param img: the whole frame
+    :param bbox: the region of the frame
+    :return: the initialized brand-new tracker.
+    """
+    tracker = TrackerWrapper(vehicle_id)
+    tracker.init(img, bbox)
+    tracker.frame = img
+    # Plot the tracker. remove "-e" in the cmdline if you get bothered.
+    if options.interactive:
+        plt.imshow(img[bbox[1]:bbox[1] + bbox[3], bbox[0]:bbox[0] + bbox[2]])
+        plt.show()
+    return tracker
+
 
 def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
     """
@@ -112,60 +190,6 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
     former_frame = None
     former_boxes = []
 
-    # Decide the type of tracker and store trackers in a list.
-    new_tracker = cv2.TrackerCSRT_create
-
-    class TrackerWrapper:
-        """
-        Wraps the opencv tracker.
-        """
-
-        def __init__(self, vehicle_id):
-            self.tracker = new_tracker()
-            self.failure_cnt = 0
-            self.last_bbox = None
-            self.vehicle_id = vehicle_id
-            self.lifetime = 0
-            self.frame = None
-
-        def plot(self):
-            """
-            Plot the tracker using matplotlib.
-            """
-            plt.imshow(self.roi)
-            plt.show()
-
-        @property
-        def roi(self):
-            """
-            Get the region of the tracker.
-            :return: numpy ndarray
-            """
-            bbox = self.last_bbox
-            img = self.frame
-            if bbox is None or img is None:
-                return None
-            # Sometimes the tracker's predicted bbox is out of the whole image.
-            # So when the pos is negative, we replace it with zero.
-            top = bbox[1] if bbox[1] > 0 else 0
-            left = bbox[0] if bbox[0] > 0 else 0
-            return img[top:top + bbox[3], left:left + bbox[2]]
-
-        def __getattr__(self, item):
-            """
-            Here we use the deep black magic of meta programming to wrap the opencv tracker.
-            By doing so, we can attach some methods and properties/fields on it.
-
-                                                                              -- kxxt, sduwh
-            """
-            return self.tracker.__getattribute__(item)
-
-        def __repr__(self):
-            """
-            Make it pretty! Debugger is your friend after you can pretty print annoying objects.
-            """
-            return f"<Tracker {self.vehicle_id}, bbox={self.last_bbox}, failure_cnt={self.failure_cnt}, lifetime={self.lifetime}>"
-
     # Store current trackers.
     trackers = []
 
@@ -174,22 +198,6 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
 
     # Threshold decide whether the tracker bbox and the detection bbox is the same one.
     IoU_threshold = 0.4
-
-    def init_new_tracker(img, bbox, vehicle_id):
-        """
-        Init new tracker with the region of img specified by the bbox.
-        :param vehicle_id: the unique id of the vehicle
-        :param img: the whole frame
-        :param bbox: the region of the frame
-        :return: the initialized brand-new tracker.
-        """
-        tracker = TrackerWrapper(vehicle_id)
-        tracker.init(img, bbox)
-        tracker.frame = img
-        # Plot the tracker. comment those if you get bothered.
-        plt.imshow(img[bbox[1]:bbox[1] + bbox[3], bbox[0]:bbox[0] + bbox[2]])
-        plt.show()
-        return tracker
 
     def update_trackers(img):
         """
