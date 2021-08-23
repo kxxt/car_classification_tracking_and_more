@@ -103,6 +103,8 @@ class TrackerWrapper:
         self.vehicle_id = vehicle_id
         self.lifetime = 0
         self.frame = None
+        self.detected = False
+        self.category = None
 
     def plot(self):
         """
@@ -140,7 +142,8 @@ class TrackerWrapper:
         """
         Make it pretty! Debugger is your friend after you can pretty print annoying objects.
         """
-        return f"<Tracker {self.vehicle_id}, bbox={self.last_bbox}, failure_cnt={self.failure_cnt}, lifetime={self.lifetime}>"
+        return f"<Tracker {self.vehicle_id}:{self.category if self.category is not None else '?'}," \
+               f" bbox={self.last_bbox}, failure_cnt={self.failure_cnt}, lifetime={self.lifetime}>"
 
 
 def init_new_tracker(img, bbox, vehicle_id):
@@ -154,6 +157,7 @@ def init_new_tracker(img, bbox, vehicle_id):
     tracker = TrackerWrapper(vehicle_id)
     tracker.init(img, bbox)
     tracker.frame = img
+    tracker.detected = True
     # Plot the tracker. remove "-e" in the cmdline if you get bothered.
     if options.interactive:
         plt.imshow(img[bbox[1]:bbox[1] + bbox[3], bbox[0]:bbox[0] + bbox[2]])
@@ -197,7 +201,7 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
     tracking_failure_count_upperbound = 5
 
     # Threshold decide whether the tracker bbox and the detection bbox is the same one.
-    IoU_threshold = 0.4
+    IoU_threshold = 0.40
 
     def update_trackers(img):
         """
@@ -211,6 +215,7 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
             # bbox: array of x,y,w,h
             success, bbox = tracker.update(img)
             tracker.lifetime += 1
+            tracker.detected = False
             if success:
                 tracker.last_bbox = bbox
                 tracker.frame = img
@@ -279,7 +284,7 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
         counter += 1
         return counter
 
-    def draw_detection(img, box, detection_frame=None):
+    def draw_detection(img, box, detection_frame=None, transform_bbox=True):
         """
         Draw detection box on img.
         :param img: frame to draw
@@ -287,7 +292,11 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
         :return: vehicle id of the detected vehicle
         """
         # Let the transform do the magic!
-        tl, br = box_transform(box, img.shape[0], img.shape[1])
+        if transform_bbox:
+            tl, br = box_transform(box, img.shape[0], img.shape[1])
+        else:
+            tl = (box[0], box[1])
+            br = (box[2], box[3])
 
         # if not len(former_boxes):
         #     ret = generate_car_id()
@@ -332,8 +341,11 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
             # It should replace others.
             max_iou_index = ious[max(range(len(ious)), key=lambda x: ious[x][1])][0]
             max_iou_tracker = trackers[max_iou_index]
+            # Mark the max IoU tracker as detected.
+            max_iou_tracker.detected = True
             # Replace max IoU tracker's id with the min id
             max_iou_tracker.vehicle_id = min_id_tracker.vehicle_id
+            ret_tracker = max_iou_tracker
             # Remove trackers with smaller IoU
             trackers_to_be_removed = [trackers[x] for x in indices if x != max_iou_index]
             for tracker in trackers_to_be_removed:
@@ -350,17 +362,19 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
                 print(f"Currently not tracking {tl},{br} since it's at bottom or top")
                 # The -1 id means the vehicle is detected but not currently tracked
                 vehicle_id = -1
+                ret_tracker = None
             else:
                 # We find a new car! Give it an id!
                 vehicle_id = generate_car_id()
                 # Tracking it by adding a new tracker!
-                trackers.append(init_new_tracker(detection_frame, tlbr2xywh(tl, br), vehicle_id))
+                ret_tracker = init_new_tracker(detection_frame, tlbr2xywh(tl, br), vehicle_id)
+                trackers.append(ret_tracker)
                 print(f"Detected new vehicle! id:{vehicle_id}")
         # Make it colorful and draw it!
         cv2.rectangle(img, tl, br, colors[vehicle_id % len(colors)], 2)
         # Draw the vehicle id!
         cv2.putText(img, str(vehicle_id), (br[0], tl[1] - 10), font, 1.2, (255, 0, 0), 1, cv2.LINE_AA)
-        return vehicle_id
+        return ret_tracker
 
     def draw_tracker(img, tracker):
         """
@@ -373,13 +387,14 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
         if bbox is None:
             return
         # Draw the tracker bbox
-        cv2.rectangle(img, (bbox[0], bbox[1]), (bbox[0] + bbox[2], bbox[1] + bbox[3]), (255, 255, 255), 2)
+        color = (255, 255, 255) if tracker.vehicle_id is None else colors[tracker.vehicle_id % len(colors)]
+        cv2.rectangle(img, (bbox[0], bbox[1]), (bbox[0] + bbox[2], bbox[1] + bbox[3]), color, 2)
         if tracker.vehicle_id is not None:
             # Draw the vehicle id of the tracker
-            cv2.putText(img, str(tracker.vehicle_id), (bbox[0], bbox[1] - 10), font, 1.2, (255, 255, 255), 1,
+            cv2.putText(img, str(tracker.vehicle_id), (bbox[0], bbox[1] - 10), font, 1.2, color, 1,
                         cv2.LINE_AA)
 
-    def draw_classification(img, detection_frame, box):
+    def draw_classification(img, detection_frame, box, tracker=None, transform_bbox=True):
         """
         Using detection_frame and box to classify a vehicle and draw the classification result on img
         :param img: frame to draw on
@@ -387,30 +402,39 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
         :param box: bbox of the vehicle
         :return: None
         """
-        tl, br = box_transform(box, detection_frame.shape[0], detection_frame.shape[1])
-        vehicle_region = detection_frame[tl[1]:br[1], tl[0]:br[0]]
-        # Transform the vehicle region so that it fits the model.
-        transformed = preprocess_vehicle_region(vehicle_region)
-        # Get the probabilities
-        probs = car_classification_sess.run(None, {inp_car_classification: transformed})[0]
-        # The most probable category id!
-        max_prob_id = np.argmax(probs)
-        # Get the category by the num <=> label mapping.
-        category = num2label[max_prob_id]
-        if category == "sedan":
-            # if the category is sedan, we should think twice!
-            largest = np.max(probs)
-            # Find the second probable choice and compare it with sedan!
-            second_largest = -1
-            second_largest_id = -1
-            for id in range(len(probs)):
-                value = probs[0, id]
-                if largest > value > second_largest:
-                    second_largest_id = id
-                    second_largest = value
-            if largest - second_largest < 0.25:
-                # if the difference is small, we take the second probable one instead!
-                category = num2label[second_largest_id]
+        if transform_bbox:
+            tl, br = box_transform(box, detection_frame.shape[0], detection_frame.shape[1])
+        else:
+            tl = (box[0], box[1])
+            br = (box[2], box[3])
+        if tracker is None or tracker.category is None:
+            vehicle_region = detection_frame[tl[1]:br[1], tl[0]:br[0]]
+            # Transform the vehicle region so that it fits the model.
+            transformed = preprocess_vehicle_region(vehicle_region)
+            # Get the probabilities
+            probs = car_classification_sess.run(None, {inp_car_classification: transformed})[0]
+            # The most probable category id!
+            max_prob_id = np.argmax(probs)
+            # Get the category by the num <=> label mapping.
+            category = num2label[max_prob_id]
+            # if category == "sedan":
+            #     # if the category is sedan, we should think twice!
+            #     largest = np.max(probs)
+            #     # Find the second probable choice and compare it with sedan!
+            #     second_largest = -1
+            #     second_largest_id = -1
+            #     for id in range(len(probs)):
+            #         value = probs[0, id]
+            #         if largest > value > second_largest:
+            #             second_largest_id = id
+            #             second_largest = value
+            #     if largest - second_largest < 0.25:
+            #         # if the difference is small, we take the second probable one instead!
+            #         category = num2label[second_largest_id]
+            if tracker is not None:
+                tracker.category = category
+        else:
+            category = tracker.category
         # Draw the category on the video.
         cv2.putText(img, category, (tl[0], tl[1] - 10), font, 1.2, (255, 33, 100), 1, cv2.LINE_AA)
 
@@ -433,8 +457,6 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
         infos = zip(normalized_boxes, confs)  # Zip normalized boxes and their confidence values.
         # new_former_boxes = []
         update_trackers(detection_frame)  # Update all the trackers.
-        for tracker in trackers:
-            draw_tracker(draw_frame, tracker)  # Visualize all the trackers。
         # out_bound_trackers = []
         # for tracker in trackers:
         #     if tracker.last_bbox is not None:
@@ -449,23 +471,52 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
                             if tracker.roi is not None and
                             # We think a tracker useless when its region is almost of the same color.
                             # The 20 threshold is just a value from my experience.
-                            np.std(tracker.roi) < 20]
+                            np.std(tracker.roi) < 32]
+        useless_trackers.extend(tracker for tracker in trackers if
+                                tracker.last_bbox is not None and
+                                # Area too small.
+                                tracker.last_bbox[2] * tracker.last_bbox[3] < 1000)
         for tracker in useless_trackers:
             trackers.remove(tracker)
-            print(f"Remove {tracker} because it's std is too small.")
+            print(f"Remove {tracker} because it's std or area is too small.")
         for info in infos:
             if info[1] < confidence_lowerbound:
                 # We do not draw the detection which is below our confidence lower bound.
                 # Just break it, because the array is sorted!
                 break
             # car_id = draw_detection(draw_frame, info[0])
-            draw_detection(draw_frame, info[0], detection_frame)
+            tracker = draw_detection(draw_frame, info[0], detection_frame)
             # new_former_boxes.append((info[0], car_id))
-            draw_classification(draw_frame, detection_frame, info[0])
+            draw_classification(draw_frame, detection_frame, info[0], tracker)
             if options.license_recognition:
                 draw_license_plate(draw_frame, detection_frame, info[0])
         # former_frame = detection_frame
         # former_boxes = new_former_boxes
+        to_be_removed = []
+        for tracker in trackers:
+            if tracker.last_bbox is not None and not tracker.detected:
+                print(f"Undetected tracker: {tracker}!")
+                roi = tracker.roi
+                std = np.std(roi)
+                yl = roi.shape[0]
+                lower_area = roi[yl // 2:yl, :, :]
+                if std < 35:
+                    to_be_removed.append(tracker)
+                elif std > 45 and np.std(lower_area) > 40:
+                    # Recover the detection box
+                    tracker.plot()
+                    print(f"std: {std}, lower_area |> std: {np.std(lower_area)}.")
+                    bbox = tracker.last_bbox
+                    bbox = (0 if bbox[0] < 0 else bbox[0], 0 if bbox[1] < 0 else bbox[1], bbox[2], bbox[3])
+                    x1y1x2y2_bbox = (bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3])
+                    draw_detection(draw_frame, x1y1x2y2_bbox,
+                                   detection_frame, transform_bbox=False)
+                    draw_classification(draw_frame, detection_frame, x1y1x2y2_bbox, tracker, transform_bbox=False)
+                    # tracker.plot()
+        for tracker in to_be_removed:
+            trackers.remove(tracker)
+        for tracker in trackers:
+            draw_tracker(draw_frame, tracker)  # Visualize all the good trackers。
         return draw_frame
 
     return process
