@@ -500,11 +500,18 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
                 std = np.std(roi)
                 yl = roi.shape[0]
                 lower_area = roi[yl // 2:yl, :, :]
+                mid_area = roi[yl // 4:3 * yl // 4, :, :]
+                mid_area_std = np.std(mid_area)
                 if std < 35:
                     to_be_removed.append(tracker)
                 elif std > 45 and np.std(lower_area) > 40:
                     # Recover the detection box
-                    tracker.plot()
+                    if mid_area_std < 40:
+                        to_be_removed.append(tracker)
+                        tracker.plot()
+                    # if roi.shape[0]*roi.shape[1] > 80000:
+                    #     tracker.plot()
+                    #     to_be_removed.append(tracker)
                     print(f"std: {std}, lower_area |> std: {np.std(lower_area)}.")
                     bbox = tracker.last_bbox
                     bbox = (0 if bbox[0] < 0 else bbox[0], 0 if bbox[1] < 0 else bbox[1], bbox[2], bbox[3])
