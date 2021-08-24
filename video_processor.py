@@ -105,6 +105,7 @@ class TrackerWrapper:
         self.frame = None
         self.detected = False
         self.category = None
+        self.former_detection_box = None
 
     def plot(self):
         """
@@ -374,6 +375,18 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
         cv2.rectangle(img, tl, br, colors[vehicle_id % len(colors)], 2)
         # Draw the vehicle id!
         cv2.putText(img, str(vehicle_id), (br[0], tl[1] - 10), font, 1.2, (255, 0, 0), 1, cv2.LINE_AA)
+        # if vehicle_id != -1:
+        #     print(f"former: {ret_tracker.former_detection_box}, now: {tl, br}")
+
+        # Store detection box in the tracker.
+        # Use it like this:
+        # if vehicle_id != -1 and ret_tracker.former_detection_box is not None:
+        #     old_tl, old_br = ret_tracker.former_detection_box
+        #     # do something here...
+        # else:
+        #     pass  # the detection gets lost or we are not tracking this vehicle, do other things here.
+        if vehicle_id != -1:
+            ret_tracker.former_detection_box = (tl, br)
         return ret_tracker
 
     def draw_tracker(img, tracker):
@@ -496,6 +509,7 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
         for tracker in trackers:
             if tracker.last_bbox is not None and not tracker.detected:
                 print(f"Undetected tracker: {tracker}!")
+                tracker.former_detection_box = None
                 roi = tracker.roi
                 std = np.std(roi)
                 yl = roi.shape[0]
