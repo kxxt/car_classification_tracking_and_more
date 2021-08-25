@@ -393,15 +393,21 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
 
         if vehicle_id != -1 and ret_tracker.former_detection_box is not None:
             if frame_id % VELOCITY_DETECT_TIMESPAN == 0:
-                old_tl, old_br = ret_tracker.former_detection_box
-                old_y = (old_tl[1] + old_br[1]) / 2
+                old_y = ret_tracker.former_detection_box[0]
                 old_real_y = pixel_coordinate_transform(old_y, transform_parameters)
                 new_y = (tl[1] + br[1]) / 2
                 new_real_y = pixel_coordinate_transform(new_y, transform_parameters)
                 # The unit of velocity is km/h
                 velocity = int(108 * (new_real_y - old_real_y) / VELOCITY_DETECT_TIMESPAN)
                 print(f"The velocity is {velocity}")
-            cv2.putText(img, str(vehicle_id)+" "+str(velocity)+" km/h", \
+            else:
+                velocity = ret_tracker.former_detection_box[1]
+            
+        else:
+            velocity = None
+
+        if velocity is not None:
+            cv2.putText(img, str(vehicle_id)+" v="+str(velocity)+" km/h", \
                     (br[0], tl[1] - 10), font, 1.2, (255, 0, 0), 1, cv2.LINE_AA)
         else:
             cv2.putText(img, str(vehicle_id), (br[0], tl[1] - 10), \
@@ -415,7 +421,8 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
         # else:
         #     pass  # the detection gets lost or we are not tracking this vehicle, do other things here.
         if vehicle_id != -1 and frame_id % VELOCITY_DETECT_TIMESPAN == 0:
-            ret_tracker.former_detection_box = (tl, br)
+            # Storage the middle-y and the velocity
+            ret_tracker.former_detection_box = ((tl[1] + br[1]) / 2, velocity)
         return ret_tracker
 
     def draw_tracker(img, tracker):
