@@ -6,6 +6,7 @@ from license_recognition import license_recognition
 from optparse import OptionParser
 from functools import reduce
 import matplotlib.pyplot as plt
+from math import tan
 
 # Parse the command line arguments.
 parser = OptionParser()
@@ -204,6 +205,15 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
     # Threshold decide whether the tracker bbox and the detection bbox is the same one.
     IoU_threshold = 0.40
 
+    def pixel_coordinate_transform(y, param):
+        """
+        Transform the pixel coordinate to the real distance.
+        The unit of the real distance is "meter".
+        :param param: the list of 4 paramaters [A, B, C, D] of transform
+        """
+        A, B, C, D = param
+        return (tan( (y - D ) / A ) - C) / B
+
     def update_trackers(img):
         """
         Update all the trackers in the list.
@@ -373,11 +383,36 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
                 print(f"Detected new vehicle! id:{vehicle_id}")
         # Make it colorful and draw it!
         cv2.rectangle(img, tl, br, colors[vehicle_id % len(colors)], 2)
-        # Draw the vehicle id!
-        cv2.putText(img, str(vehicle_id), (br[0], tl[1] - 10), font, 1.2, (255, 0, 0), 1, cv2.LINE_AA)
+
         # if vehicle_id != -1:
         #     print(f"former: {ret_tracker.former_detection_box}, now: {tl, br}")
 
+        # The parameters of model
+        transform_parameters = [-3308070, 246.097, 3487.64, 5196030]
+        VELOCITY_DETECT_TIMESPAN = 4
+
+        if vehicle_id != -1 and ret_tracker.former_detection_box is not None:
+            if frame_id % VELOCITY_DETECT_TIMESPAN == 0:
+                old_y = ret_tracker.former_detection_box[0]
+                old_real_y = pixel_coordinate_transform(old_y, transform_parameters)
+                new_y = (tl[1] + br[1]) / 2
+                new_real_y = pixel_coordinate_transform(new_y, transform_parameters)
+                # The unit of velocity is km/h
+                velocity = int(108 * (new_real_y - old_real_y) / VELOCITY_DETECT_TIMESPAN)
+                print(f"The velocity is {velocity}")
+            else:
+                velocity = ret_tracker.former_detection_box[1]
+            
+        else:
+            velocity = None
+
+        if velocity is not None:
+            cv2.putText(img, str(vehicle_id)+" v="+str(velocity)+" km/h", \
+                    (br[0], tl[1] - 10), font, 1.2, (255, 0, 0), 1, cv2.LINE_AA)
+        else:
+            cv2.putText(img, str(vehicle_id), (br[0], tl[1] - 10), \
+                font, 1.2, (255, 0, 0), 1, cv2.LINE_AA)
+            
         # Store detection box in the tracker.
         # Use it like this:
         # if vehicle_id != -1 and ret_tracker.former_detection_box is not None:
@@ -385,8 +420,9 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
         #     # do something here...
         # else:
         #     pass  # the detection gets lost or we are not tracking this vehicle, do other things here.
-        if vehicle_id != -1:
-            ret_tracker.former_detection_box = (tl, br)
+        if vehicle_id != -1 and frame_id % VELOCITY_DETECT_TIMESPAN == 0:
+            # Storage the middle-y and the velocity
+            ret_tracker.former_detection_box = ((tl[1] + br[1]) / 2, velocity)
         return ret_tracker
 
     def draw_tracker(img, tracker):
