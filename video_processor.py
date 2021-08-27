@@ -78,6 +78,7 @@ def get_iou(a, b, epsilon=1e-5):
     return iou
 
 
+# A simple function to check if a character is a chinese character
 is_chinese = lambda ch: '\u4e00' <= ch <= '\u9fff'
 
 
@@ -497,20 +498,6 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
             max_prob_id = np.argmax(probs)
             # Get the category by the num <=> label mapping.
             category = num2label[max_prob_id]
-            # if category == "sedan":
-            #     # if the category is sedan, we should think twice!
-            #     largest = np.max(probs)
-            #     # Find the second probable choice and compare it with sedan!
-            #     second_largest = -1
-            #     second_largest_id = -1
-            #     for id in range(len(probs)):
-            #         value = probs[0, id]
-            #         if largest > value > second_largest:
-            #             second_largest_id = id
-            #             second_largest = value
-            #     if largest - second_largest < 0.25:
-            #         # if the difference is small, we take the second probable one instead!
-            #         category = num2label[second_largest_id]
             if tracker is not None:
                 tracker.category = category
         else:
@@ -528,18 +515,7 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
         boxes, classes, confs = car_detection_sess.run(None, {inp_car_detection: transformed})
         normalized_boxes = (box / 800 for box in boxes)  # Normalize the bboxes
         infos = zip(normalized_boxes, confs)  # Zip normalized boxes and their confidence values.
-        # new_former_boxes = []
         update_trackers(detection_frame)  # Update all the trackers.
-        # out_bound_trackers = []
-        # for tracker in trackers:
-        #     if tracker.last_bbox is not None:
-        #         for num in tracker.last_bbox:
-        #             if num < 0 and tracker.lifetime > 60:
-        #                 out_bound_trackers.append(tracker)
-        #                 break
-        # for tracker in out_bound_trackers:
-        #     trackers.remove(tracker)
-        #     print(f"Remove {tracker} because it's out of bound.")
         useless_trackers = [tracker for tracker in trackers  # collect useless trackers
                             if tracker.roi is not None and
                             # We think a tracker useless when its region is almost of the same color.
