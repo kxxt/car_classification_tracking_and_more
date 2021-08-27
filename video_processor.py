@@ -354,13 +354,18 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
             # It should replace others.
             max_iou_index = ious[max(range(len(ious)), key=lambda x: ious[x][1])][0]
             max_iou_tracker = trackers[max_iou_index]
-            # Mark the max IoU tracker as detected.
-            max_iou_tracker.detected = True
+
             # Replace max IoU tracker's id with the min id
             max_iou_tracker.vehicle_id = min_id_tracker.vehicle_id
             max_iou_tracker.license = min_id_tracker.license
             max_iou_tracker.former_detection_box = min_id_tracker.former_detection_box
             ret_tracker = max_iou_tracker
+            if max_iou_tracker.detected:
+                print(f"Redundant detection found! tracker: {max_iou_tracker}")
+                return ret_tracker, set(), img
+            else:
+                # Mark the max IoU tracker as detected.
+                max_iou_tracker.detected = True
             # Remove trackers with smaller IoU
             trackers_to_be_removed = [trackers[x] for x in indices if x != max_iou_index]
             for tracker in trackers_to_be_removed:
@@ -385,6 +390,7 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
                 ret_tracker = init_new_tracker(detection_frame, tlbr2xywh(tl, br), vehicle_id)
                 trackers.append(ret_tracker)
                 print(f"Detected new vehicle! id:{vehicle_id}")
+
         # Make it colorful and draw it!
         cv2.rectangle(img, tl, br, colors[vehicle_id % len(colors)], 2)
 
@@ -600,7 +606,7 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
                     # tracker.plot()
         for index, record in license_plate_data.iterrows():
             cv2.rectangle(draw_frame, (int(record["left"]), int(record['top'])),
-                          (int(record['left'] + record['w']), int(record['top'] + record['h'])), (0, 255, 0), 1)
+                          (int(record['left'] + record['w']), int(record['top'] + record['h'])), (0, 255, 0), 2)
             if index not in consumed_license_plates and record['license'] != "None":
                 # We lost a detection.
                 print(f"undetected car's license plate: {record['license']}")
