@@ -603,9 +603,10 @@ if __name__ == "__main__":
             break
         draw_frame = process(frame)
         video_writer.write(draw_frame)
-        # Uncomment those if you want the video show.
-        # cv2.imshow("Video", draw_frame)
-        # cv2.waitKey(20)
+        if options.interactive:
+            # If we are in interactive mode, show the video to user.
+            cv2.imshow("Video", draw_frame)
+            cv2.waitKey(20)
         frame_id += 1
     video_writer.release()
     print(f"Processed {frame_id + 1} frames in total!")
