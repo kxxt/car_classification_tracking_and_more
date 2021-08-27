@@ -3,9 +3,7 @@ import numpy as np
 import onnxruntime as onnx
 import json
 from PIL import Image, ImageDraw, ImageFont
-from license_recognition import license_recognition
 from optparse import OptionParser
-from functools import reduce
 import matplotlib.pyplot as plt
 from math import tan
 import pandas as pd
@@ -22,26 +20,21 @@ parser.add_option("-t", "--draw-tracker-bbox",
 parser.add_option("-e", "--interactive",
                   action="store_true", dest="interactive", default=False,
                   help="Show the processed video in realtime and visualize the trackers when inited, etc.")
+parser.add_option("-s", "--silent",
+                  action="store_true", dest="silent", default=False,
+                  help="Hide all cmdline outputs.")
+parser.add_option("-l", "--license-recognition-result", type="string", dest="license_recognition_result_file",
+                  default="license_recognition_result.csv", metavar="FILE",
+                  help="The result csv file of license plate recognition.")
 
 # Define the color palette.
 colors = [
-    (255, 0, 0),
-    (0, 255, 0),
-    (0, 0, 255),
-    (255, 255, 0),
-    (255, 0, 255),
-    (0, 255, 255),
-    (255, 255, 255),
-    (0, 0, 0),
-    (255, 128, 128),
-    (128, 255, 128),
-    (128, 128, 255),
-    (255, 128, 0),
-    (255, 0, 128),
-    (0, 255, 128),
-    (128, 255, 0),
-    (0, 128, 255),
-    (128, 0, 255)
+    (255, 0, 0), (0, 255, 0), (0, 0, 255),
+    (255, 255, 0), (255, 0, 255), (0, 255, 255),
+    (255, 255, 255), (0, 0, 0), (255, 128, 128),
+    (128, 255, 128), (128, 128, 255), (255, 128, 0),
+    (255, 0, 128), (0, 255, 128), (128, 255, 0),
+    (0, 128, 255), (128, 0, 255)
 ]
 
 
@@ -83,6 +76,9 @@ def get_iou(a, b, epsilon=1e-5):
     # RATIO OF AREA OF OVERLAP OVER COMBINED AREA
     iou = area_overlap / (area_combined + epsilon)
     return iou
+
+
+is_chinese = lambda ch: '\u4e00' <= ch <= '\u9fff'
 
 
 def tlbr2xywh(tl, br):
@@ -328,19 +324,6 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
             tl = (box[0], box[1])
             br = (box[2], box[3])
 
-        # if not len(former_boxes):
-        #     ret = generate_car_id()
-        # else:
-        #     dis_and_id = [(np.linalg.norm(box - former_box), former_id) for former_box, former_id in former_boxes]
-        #     min_dis_and_id = min(dis_and_id, key=lambda x: x[0])
-        #     if min_dis_and_id[0] > 0.3:
-        #         print(f"Tracking failed at {min_dis_and_id[0]}")
-        #         ret = generate_car_id()
-        #     else:
-        #         ret = min_dis_and_id[1]
-        # color = colors[ret % len(colors)]
-        # color = (255, 128, 0)
-
         # Storage the ious and corresponding indices
         ious = []
         for index, tracker in enumerate(trackers):
@@ -376,6 +359,7 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
             # Replace max IoU tracker's id with the min id
             max_iou_tracker.vehicle_id = min_id_tracker.vehicle_id
             max_iou_tracker.license = min_id_tracker.license
+            max_iou_tracker.former_detection_box = min_id_tracker.former_detection_box
             ret_tracker = max_iou_tracker
             # Remove trackers with smaller IoU
             trackers_to_be_removed = [trackers[x] for x in indices if x != max_iou_index]
@@ -411,21 +395,24 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
             for index, record in license_recognition_data.iterrows():
                 lpbbox = (record['left'], record['top'], record['w'], record['h'])
                 lptext = record['license']
-                a = 0
                 if lpbbox[0] > tl[0] and lpbbox[1] > tl[1] and lptext != 'None' \
                         and lpbbox[0] + lpbbox[2] < br[0] and lpbbox[1] + lpbbox[3] < br[1]:
                     # if the license plate bbox is inside the vehicle region
                     if ret_tracker.license is not None and ret_tracker.license != lptext:
                         print(f"License of {ret_tracker} is inconsistent! {ret_tracker.license}, new:{lptext}!")
+                        if is_chinese(lptext[0]) and not is_chinese(ret_tracker.license[0]):
+                            ret_tracker.license = lptext
+                        else:
+                            ret_tracker.license = max((ret_tracker.license, lptext), key=lambda x: len(x))
                     else:
                         ret_tracker.license = lptext
                     consumed_license_plates.add(index)
                     break
             if ret_tracker.license is not None:
-                img = cv2ImgAddText(img, ret_tracker.license, tl[0]+5, br[1] - 30)
+                img = cv2ImgAddText(img, ret_tracker.license, tl[0] + 5, br[1] - 30)
 
         # Draw the vehicle id!
-        cv2.putText(img, str(vehicle_id), (br[0]-30*len(str(vehicle_id)), tl[1] + 34), font, 1.2,
+        cv2.putText(img, str(vehicle_id), (br[0] - 30 * len(str(vehicle_id)), tl[1] + 34), font, 1.2,
                     colors[vehicle_id % len(colors)], 2, cv2.LINE_AA)
 
         # The parameters of model
@@ -580,6 +567,8 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
                 roi = tracker.roi
                 std = np.std(roi)
                 yl = roi.shape[0]
+                upper_area = roi[0:yl // 2, :, :]
+                upper_area_std = np.std(upper_area)
                 lower_area = roi[yl // 2:yl, :, :]
                 mid_area = roi[yl // 4:3 * yl // 4, :, :]
                 mid_area_std = np.std(mid_area)
@@ -587,7 +576,14 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
                     to_be_removed.append(tracker)
                 elif std > 45 and np.std(lower_area) > 40:
                     # Recover the detection box
-                    if mid_area_std < 40:
+                    if mid_area_std < 39.98 or tracker.last_bbox[1] < -20 or tracker.last_bbox[0] < -20:
+                        to_be_removed.append(tracker)
+                        # tracker.plot()
+                    # if upper_area_std < 40:
+                    #     to_be_removed.append(tracker)
+                    #     tracker.plot()
+
+                    if roi.shape[0] * roi.shape[1] < 4400:
                         to_be_removed.append(tracker)
                         tracker.plot()
                     # if roi.shape[0]*roi.shape[1] > 80000:
@@ -625,6 +621,8 @@ if __name__ == "__main__":
     (options, args) = parser.parse_args()
     if not options.input:
         parser.error("Missing input file!")
+    if options.silent:
+        print = lambda x: None
     # Init video
     cap = cv2.VideoCapture(options.input)
     result_file = options.output
@@ -638,7 +636,7 @@ if __name__ == "__main__":
     # Process video
     frame_id = 0
     # Load license recognition result data.
-    df = pd.read_csv("license_recognition_result.csv")
+    df = pd.read_csv(options.license_recognition_result_file)
     while cap.isOpened():
         success, frame = cap.read()
         if not success:
