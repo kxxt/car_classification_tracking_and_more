@@ -2,11 +2,13 @@ import cv2
 import numpy as np
 import onnxruntime as onnx
 import json
+from PIL import Image, ImageDraw, ImageFont
 from license_recognition import license_recognition
 from optparse import OptionParser
 from functools import reduce
 import matplotlib.pyplot as plt
 from math import tan
+import pandas as pd
 
 # Parse the command line arguments.
 parser = OptionParser()
@@ -14,9 +16,9 @@ parser.add_option("-i", "--input", type="string", dest="input",
                   help="input file", metavar="FILE")
 parser.add_option("-o", "--output", type="string", dest="output",
                   help="output file", metavar="FILE", default="output.mp4")
-parser.add_option("-n", "--no-license-recognition",
-                  action="store_false", dest="license_recognition", default=True,
-                  help="Do not perform license recognition during processing.")
+parser.add_option("-t", "--draw-tracker-bbox",
+                  action="store_true", dest="draw_tracker_bbox", default=False,
+                  help="Draw the tracker bbox on the processed video.")
 parser.add_option("-e", "--interactive",
                   action="store_true", dest="interactive", default=False,
                   help="Show the processed video in realtime and visualize the trackers when inited, etc.")
@@ -89,6 +91,19 @@ def tlbr2xywh(tl, br):
     # Decide the type of tracker and store trackers in a list.
 
 
+def cv2ImgAddText(img, text, left, top, text_color=(0, 255, 0), text_size=24):
+    if isinstance(img, np.ndarray):  # 判断是否OpenCV图片类型
+        img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+    # 创建一个可以在给定图像上绘图的对象
+    draw = ImageDraw.Draw(img)
+    # 字体的格式
+    font = ImageFont.truetype("simhei", text_size, encoding="utf-8")
+    # 绘制文本
+    draw.text((left, top), text, text_color, stroke_width=1, font=font)
+    # 转换回OpenCV格式
+    return cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
+
+
 new_tracker = cv2.TrackerCSRT_create
 
 
@@ -106,6 +121,7 @@ class TrackerWrapper:
         self.frame = None
         self.detected = False
         self.category = None
+        self.license = None
         self.former_detection_box = None
 
     def plot(self):
@@ -212,7 +228,7 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
         :param param: the list of 4 paramaters [A, B, C, D] of transform
         """
         A, B, C, D = param
-        return (tan( (y - D ) / A ) - C) / B
+        return (tan((y - D) / A) - C) / B
 
     def update_trackers(img):
         """
@@ -295,12 +311,15 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
         counter += 1
         return counter
 
-    def draw_detection(img, box, detection_frame=None, transform_bbox=True):
+    def draw_detection(img, box, license_recognition_data, detection_frame=None, transform_bbox=True):
         """
         Draw detection box on img.
+        :param license_recognition_data: this frame's license_recognition data, in pandas dataframe format.
+        :param detection_frame: frame to perform detection
+        :param transform_bbox: transform_bbox before using.
         :param img: frame to draw
         :param box: detection bbox
-        :return: vehicle id of the detected vehicle
+        :return: the tracker of the vehicle and the consumed license plate record ids and the drawn frame.
         """
         # Let the transform do the magic!
         if transform_bbox:
@@ -356,6 +375,7 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
             max_iou_tracker.detected = True
             # Replace max IoU tracker's id with the min id
             max_iou_tracker.vehicle_id = min_id_tracker.vehicle_id
+            max_iou_tracker.license = min_id_tracker.license
             ret_tracker = max_iou_tracker
             # Remove trackers with smaller IoU
             trackers_to_be_removed = [trackers[x] for x in indices if x != max_iou_index]
@@ -386,6 +406,27 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
 
         # if vehicle_id != -1:
         #     print(f"former: {ret_tracker.former_detection_box}, now: {tl, br}")
+        consumed_license_plates = set()
+        if ret_tracker is not None:
+            for index, record in license_recognition_data.iterrows():
+                lpbbox = (record['left'], record['top'], record['w'], record['h'])
+                lptext = record['license']
+                a = 0
+                if lpbbox[0] > tl[0] and lpbbox[1] > tl[1] and lptext != 'None' \
+                        and lpbbox[0] + lpbbox[2] < br[0] and lpbbox[1] + lpbbox[3] < br[1]:
+                    # if the license plate bbox is inside the vehicle region
+                    if ret_tracker.license is not None and ret_tracker.license != lptext:
+                        print(f"License of {ret_tracker} is inconsistent! {ret_tracker.license}, new:{lptext}!")
+                    else:
+                        ret_tracker.license = lptext
+                    consumed_license_plates.add(index)
+                    break
+            if ret_tracker.license is not None:
+                img = cv2ImgAddText(img, ret_tracker.license, tl[0]+5, br[1] - 30)
+
+        # Draw the vehicle id!
+        cv2.putText(img, str(vehicle_id), (br[0]-30*len(str(vehicle_id)), tl[1] + 34), font, 1.2,
+                    colors[vehicle_id % len(colors)], 2, cv2.LINE_AA)
 
         # The parameters of model
         transform_parameters = [-3308070, 246.097, 3487.64, 5196030]
@@ -402,17 +443,14 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
                 print(f"The velocity is {velocity}")
             else:
                 velocity = ret_tracker.former_detection_box[1]
-            
+
         else:
             velocity = None
 
         if velocity is not None:
-            cv2.putText(img, str(vehicle_id)+" v="+str(velocity)+" km/h", \
-                    (br[0], tl[1] - 10), font, 1.2, (255, 0, 0), 1, cv2.LINE_AA)
-        else:
-            cv2.putText(img, str(vehicle_id), (br[0], tl[1] - 10), \
-                font, 1.2, (255, 0, 0), 1, cv2.LINE_AA)
-            
+            cv2.putText(img, str(velocity) + " km/h",
+                        (br[0] + 5, tl[1] + 30), font, 1.2, (255, 0, 0), 2, cv2.LINE_AA)
+
         # Store detection box in the tracker.
         # Use it like this:
         # if vehicle_id != -1 and ret_tracker.former_detection_box is not None:
@@ -423,7 +461,7 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
         if vehicle_id != -1 and frame_id % VELOCITY_DETECT_TIMESPAN == 0:
             # Storage the middle-y and the velocity
             ret_tracker.former_detection_box = ((tl[1] + br[1]) / 2, velocity)
-        return ret_tracker
+        return ret_tracker, consumed_license_plates, img
 
     def draw_tracker(img, tracker):
         """
@@ -440,7 +478,7 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
         cv2.rectangle(img, (bbox[0], bbox[1]), (bbox[0] + bbox[2], bbox[1] + bbox[3]), color, 2)
         if tracker.vehicle_id is not None:
             # Draw the vehicle id of the tracker
-            cv2.putText(img, str(tracker.vehicle_id), (bbox[0], bbox[1] - 10), font, 1.2, color, 1,
+            cv2.putText(img, str(tracker.vehicle_id), (bbox[0], bbox[1] + 30), font, 1.2, color, 1,
                         cv2.LINE_AA)
 
     def draw_classification(img, detection_frame, box, tracker=None, transform_bbox=True):
@@ -485,16 +523,9 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
         else:
             category = tracker.category
         # Draw the category on the video.
-        cv2.putText(img, category, (tl[0], tl[1] - 10), font, 1.2, (255, 33, 100), 1, cv2.LINE_AA)
+        cv2.putText(img, category, (tl[0], tl[1] - 10), font, 1.2, (255, 33, 100), 2, cv2.LINE_AA)
 
-    def draw_license_plate(img, detection_frame, box):
-        tl, br = box_transform(box, detection_frame.shape[0], detection_frame.shape[1])
-        vehicle_region = detection_frame[tl[1]:br[1], tl[0]:br[0]]
-        license_plate = license_recognition(vehicle_region)
-        if license_plate is not None:
-            cv2.putText(img, license_plate, (tl[0], tl[1] + 10), font, 1.2, (255, 33, 100), 1, cv2.LINE_AA)
-
-    def process(detection_frame):
+    def process(detection_frame, license_plate_data):
         nonlocal former_frame, former_boxes
         # transform the frame for detection.
         transformed = preprocess_image(detection_frame)
@@ -528,17 +559,17 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
         for tracker in useless_trackers:
             trackers.remove(tracker)
             print(f"Remove {tracker} because it's std or area is too small.")
+        consumed_license_plates = set()
         for info in infos:
             if info[1] < confidence_lowerbound:
                 # We do not draw the detection which is below our confidence lower bound.
                 # Just break it, because the array is sorted!
                 break
             # car_id = draw_detection(draw_frame, info[0])
-            tracker = draw_detection(draw_frame, info[0], detection_frame)
+            tracker, consumed_lps, draw_frame = draw_detection(draw_frame, info[0], license_plate_data, detection_frame)
+            consumed_license_plates.update(consumed_lps)
             # new_former_boxes.append((info[0], car_id))
             draw_classification(draw_frame, detection_frame, info[0], tracker)
-            if options.license_recognition:
-                draw_license_plate(draw_frame, detection_frame, info[0])
         # former_frame = detection_frame
         # former_boxes = new_former_boxes
         to_be_removed = []
@@ -566,14 +597,24 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
                     bbox = tracker.last_bbox
                     bbox = (0 if bbox[0] < 0 else bbox[0], 0 if bbox[1] < 0 else bbox[1], bbox[2], bbox[3])
                     x1y1x2y2_bbox = (bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3])
-                    draw_detection(draw_frame, x1y1x2y2_bbox,
-                                   detection_frame, transform_bbox=False)
+                    _, consumed_lps, draw_frame = draw_detection(draw_frame, x1y1x2y2_bbox, license_plate_data,
+                                                                 detection_frame, transform_bbox=False)
+                    consumed_license_plates.update(consumed_lps)
                     draw_classification(draw_frame, detection_frame, x1y1x2y2_bbox, tracker, transform_bbox=False)
                     # tracker.plot()
+        for index, record in license_plate_data.iterrows():
+            cv2.rectangle(draw_frame, (int(record["left"]), int(record['top'])),
+                          (int(record['left'] + record['w']), int(record['top'] + record['h'])), (0, 255, 0), 1)
+            if index not in consumed_license_plates and record['license'] != "None":
+                # We lost a detection.
+                print(f"undetected car's license plate: {record['license']}")
+                draw_frame = cv2ImgAddText(draw_frame, record['license'], record['left'],
+                                           record['top'] + record['h'] + 1)
         for tracker in to_be_removed:
             trackers.remove(tracker)
-        for tracker in trackers:
-            draw_tracker(draw_frame, tracker)  # Visualize all the good trackers。
+        if options.draw_tracker_bbox:
+            for tracker in trackers:
+                draw_tracker(draw_frame, tracker)  # Visualize all the good trackers。
         return draw_frame
 
     return process
@@ -596,12 +637,14 @@ if __name__ == "__main__":
     process = init_session()
     # Process video
     frame_id = 0
+    # Load license recognition result data.
+    df = pd.read_csv("license_recognition_result.csv")
     while cap.isOpened():
         success, frame = cap.read()
         if not success:
             print("Finished!")
             break
-        draw_frame = process(frame)
+        draw_frame = process(frame, df[df['frame_id'] == frame_id + 1])
         video_writer.write(draw_frame)
         if options.interactive:
             # If we are in interactive mode, show the video to user.
