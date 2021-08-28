@@ -26,6 +26,11 @@ parser.add_option("-s", "--silent",
 parser.add_option("-l", "--license-recognition-result", type="string", dest="license_recognition_result_file",
                   default="license_recognition_result.csv", metavar="FILE",
                   help="The result csv file of license plate recognition.")
+parser.add_option("-d", "--dump",
+                  action="store_true", dest="dump", default=False,
+                  help="Dump every frame's analysis data into result.json.")
+
+dump = []
 
 # Define the color palette.
 colors = [
@@ -159,6 +164,17 @@ class TrackerWrapper:
         """
         return f"<Tracker {self.vehicle_id}:{self.category if self.category is not None else '?'}," \
                f" bbox={self.last_bbox}, failure_cnt={self.failure_cnt}, lifetime={self.lifetime}>"
+
+    def dict(self):
+        return {
+            "last_bbox": self.last_bbox,
+            "license": self.license,
+            "vehicle_id": self.vehicle_id,
+            "category": self.category,
+            "former_detection_box": self.former_detection_box,
+            "failure_cnt": self.failure_cnt,
+            "detected": self.detected
+        }
 
 
 def init_new_tracker(img, bbox, vehicle_id):
@@ -316,7 +332,7 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
         :param transform_bbox: transform_bbox before using.
         :param img: frame to draw
         :param box: detection bbox
-        :return: the tracker of the vehicle and the consumed license plate record ids and the drawn frame.
+        :return: the tracker of the vehicle and the consumed license plate record ids and the drawn frame and the detection result dict
         """
         # Let the transform do the magic!
         if transform_bbox:
@@ -363,7 +379,7 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
             ret_tracker = max_iou_tracker
             if max_iou_tracker.detected:
                 print(f"Redundant detection found! tracker: {max_iou_tracker}")
-                return ret_tracker, set(), img
+                return ret_tracker, set(), img, None
             else:
                 # Mark the max IoU tracker as detected.
                 max_iou_tracker.detected = True
@@ -445,6 +461,13 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
             cv2.putText(img, str(velocity) + " km/h",
                         (br[0] + 5, tl[1] + 30), font, 1.2, (255, 0, 0), 2, cv2.LINE_AA)
 
+        detection_dict = {
+            "tl": tl,
+            "br": br,
+            "vehicle_id": vehicle_id,
+            "tracker": ret_tracker
+        } if options.dump else None
+
         # Store detection box in the tracker.
         # Use it like this:
         # if vehicle_id != -1 and ret_tracker.former_detection_box is not None:
@@ -455,7 +478,7 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
         if vehicle_id != -1 and frame_id % VELOCITY_DETECT_TIMESPAN == 0:
             # Storage the middle-y and the velocity
             ret_tracker.former_detection_box = ((tl[1] + br[1]) / 2, velocity)
-        return ret_tracker, consumed_license_plates, img
+        return ret_tracker, consumed_license_plates, img, detection_dict
 
     def draw_tracker(img, tracker):
         """
@@ -529,16 +552,22 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
             trackers.remove(tracker)
             print(f"Remove {tracker} because it's std or area is too small.")
         consumed_license_plates = set()
+        detections = []
         for info in infos:
             if info[1] < confidence_lowerbound:
                 # We do not draw the detection which is below our confidence lower bound.
                 # Just break it, because the array is sorted!
                 break
             # car_id = draw_detection(draw_frame, info[0])
-            tracker, consumed_lps, draw_frame = draw_detection(draw_frame, info[0], license_plate_data, detection_frame)
+            tracker, consumed_lps, draw_frame, detection_dict = draw_detection(draw_frame, info[0], license_plate_data,
+                                                                               detection_frame)
             consumed_license_plates.update(consumed_lps)
             # new_former_boxes.append((info[0], car_id))
             draw_classification(draw_frame, detection_frame, info[0], tracker)
+            if detection_dict is not None:
+                detection_dict['tracker'] = detection_dict["tracker"].dict() \
+                    if detection_dict["tracker"] is not None else None
+                detections.append(detection_dict)
         # former_frame = detection_frame
         # former_boxes = new_former_boxes
         to_be_removed = []
@@ -575,14 +604,30 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
                     bbox = tracker.last_bbox
                     bbox = (0 if bbox[0] < 0 else bbox[0], 0 if bbox[1] < 0 else bbox[1], bbox[2], bbox[3])
                     x1y1x2y2_bbox = (bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3])
-                    _, consumed_lps, draw_frame = draw_detection(draw_frame, x1y1x2y2_bbox, license_plate_data,
-                                                                 detection_frame, transform_bbox=False)
+                    _, consumed_lps, draw_frame, detection_dict = draw_detection(draw_frame, x1y1x2y2_bbox,
+                                                                                 license_plate_data,
+                                                                                 detection_frame, transform_bbox=False)
                     consumed_license_plates.update(consumed_lps)
                     draw_classification(draw_frame, detection_frame, x1y1x2y2_bbox, tracker, transform_bbox=False)
+                    if detection_dict is not None:
+                        detection_dict['tracker'] = detection_dict["tracker"].dict() \
+                            if detection_dict["tracker"] is not None else None
+                        detections.append(detection_dict)
                     # tracker.plot()
+        license_plates = []
         for index, record in license_plate_data.iterrows():
             cv2.rectangle(draw_frame, (int(record["left"]), int(record['top'])),
                           (int(record['left'] + record['w']), int(record['top'] + record['h'])), (0, 255, 0), 2)
+            if options.dump:
+                license_plates.append({
+                    "left": record['left'],
+                    "top": record['top'],
+                    "width": record['w'],
+                    "height": record['h'],
+                    "license": record['license'] if record['license'] != "None" else None,
+                    "score": record['score'],
+                    "used": index in consumed_license_plates
+                })
             if index not in consumed_license_plates and record['license'] != "None":
                 # We lost a detection.
                 print(f"undetected car's license plate: {record['license']}")
@@ -593,7 +638,10 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
         if options.draw_tracker_bbox:
             for tracker in trackers:
                 draw_tracker(draw_frame, tracker)  # Visualize all the good trackers。
-        return draw_frame
+        return draw_frame, {
+            "detections": detections,
+            "license_plates": license_plates
+        }
 
     return process
 
@@ -619,12 +667,15 @@ if __name__ == "__main__":
     frame_id = 0
     # Load license recognition result data.
     df = pd.read_csv(options.license_recognition_result_file)
+    dump_result = []
     while cap.isOpened():
         success, frame = cap.read()
         if not success:
             print("Finished!")
             break
-        draw_frame = process(frame, df[df['frame_id'] == frame_id + 1])
+        draw_frame, frame_analysis = process(frame, df[df['frame_id'] == frame_id + 1])
+        if options.dump:
+            dump_result.append(frame_analysis | {"frame_id": frame_id})
         video_writer.write(draw_frame)
         if options.interactive:
             # If we are in interactive mode, show the video to user.
@@ -632,4 +683,11 @@ if __name__ == "__main__":
             cv2.waitKey(20)
         frame_id += 1
     video_writer.release()
+    with open("result.json", "w") as f:
+        json.dump({
+            "width": frame_width,
+            "height": frame_height,
+            "fps": fps_video,
+            "frames": dump_result
+        }, f)
     print(f"Processed {frame_id + 1} frames in total!")
