@@ -128,6 +128,7 @@ class TrackerWrapper:
         self.category = None  # The category of the vehicle
         self.license = None  # The license plate of the vehicle
         self.former_detection_box = None  # Former detection box of the tracker,
+        self.last_license_bbox = None
         # if it's not detected, this field should be None
 
     def plot(self):
@@ -182,7 +183,8 @@ class TrackerWrapper:
             "category": self.category,
             "former_detection_box": self.former_detection_box,
             "failure_cnt": self.failure_cnt,
-            "detected": self.detected
+            "detected": self.detected,
+            "last_license_bbox": self.last_license_bbox
         }
 
 
@@ -270,6 +272,7 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
             else:
                 # If the tracker failed, we clear the last_bbox and frame fields and increase the failure counter
                 tracker.last_bbox = None
+                tracker.last_license_bbox = None
                 tracker.frame = None
                 tracker.failure_cnt += 1
                 if tracker.failure_cnt > tracking_failure_count_upperbound:
@@ -434,24 +437,26 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
             for index, record in license_recognition_data.iterrows():
                 lpbbox = (record['left'], record['top'], record['w'], record['h'])  # The bbox of the license plate
                 lptext = record['license']  # The text on the license plate
-                if lpbbox[0] > tl[0] and lpbbox[1] > tl[1] and lptext != 'None' \
+                if lpbbox[0] > tl[0] and lpbbox[1] > tl[1]  \
                         and lpbbox[0] + lpbbox[2] < br[0] and lpbbox[1] + lpbbox[3] < br[1]:
-                    # if the license plate bbox is inside the vehicle region
-                    if ret_tracker.license is not None and ret_tracker.license != lptext:
-                        # if the detected license is different from the license stored in the tracker
-                        print(f"License of {ret_tracker} is inconsistent! {ret_tracker.license}, new:{lptext}!")
-                        if is_chinese(lptext[0]) and not is_chinese(ret_tracker.license[0]):
-                            # The license plate text should begin with a chinese character.
-                            ret_tracker.license = lptext
+                    if lptext != 'None':
+                        # if the license plate bbox is inside the vehicle region
+                        if ret_tracker.license is not None and ret_tracker.license != lptext:
+                            # if the detected license is different from the license stored in the tracker
+                            print(f"License of {ret_tracker} is inconsistent! {ret_tracker.license}, new:{lptext}!")
+                            if is_chinese(lptext[0]) and not is_chinese(ret_tracker.license[0]):
+                                # The license plate text should begin with a chinese character.
+                                ret_tracker.license = lptext
+                            else:
+                                # If both text begins with a chinese character, we take the longer text.
+                                ret_tracker.license = max((ret_tracker.license, lptext), key=lambda x: len(x))
                         else:
-                            # If both text begins with a chinese character, we take the longer text.
-                            ret_tracker.license = max((ret_tracker.license, lptext), key=lambda x: len(x))
-                    else:
-                        # If we didn't know the license text before, we store it in the tracker
-                        ret_tracker.license = lptext
+                            # If we didn't know the license text before, we store it in the tracker
+                            ret_tracker.license = lptext
+                    ret_tracker.last_license_bbox = lpbbox
                     consumed_license_plates.add(index)  # Mark the license plate data as consumed.
                     break  # Just find the first one, not need to check other data.
-
+            if ret_tracker.last_license_bbox is None: print("No license plate detected!")
             if ret_tracker.license is not None:
                 # If we have the car's license plate, write it on the bottom left corner of the bbox.
                 img = cv2ImgAddText(img, ret_tracker.license, tl[0] + 5, br[1] - 30)
