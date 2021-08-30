@@ -127,7 +127,6 @@ class TrackerWrapper:
         self.detected = False  # Is the tracker detected in the current frame
         self.category = None  # The category of the vehicle
         self.license = None  # The license plate of the vehicle
-        self.former_detection_box = None  # Former detection box of the tracker,
         self.last_license_bbox = None
         # if it's not detected, this field should be None
 
@@ -181,7 +180,6 @@ class TrackerWrapper:
             "license": self.license,
             "vehicle_id": self.vehicle_id,
             "category": self.category,
-            "former_detection_box": self.former_detection_box,
             "failure_cnt": self.failure_cnt,
             "detected": self.detected,
             "last_license_bbox": self.last_license_bbox
@@ -388,7 +386,6 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
             # because the min id tracker comes first. It knows more about the car.
             max_iou_tracker.vehicle_id = min_id_tracker.vehicle_id
             max_iou_tracker.license = min_id_tracker.license
-            max_iou_tracker.former_detection_box = min_id_tracker.former_detection_box
 
             # The max_iou_tracker is the tracker that we want to give back to the caller.
             ret_tracker = max_iou_tracker
@@ -437,7 +434,7 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
             for index, record in license_recognition_data.iterrows():
                 lpbbox = (record['left'], record['top'], record['w'], record['h'])  # The bbox of the license plate
                 lptext = record['license']  # The text on the license plate
-                if lpbbox[0] > tl[0] and lpbbox[1] > tl[1]  \
+                if lpbbox[0] > tl[0] and lpbbox[1] > tl[1] \
                         and lpbbox[0] + lpbbox[2] < br[0] and lpbbox[1] + lpbbox[3] < br[1]:
                     if lptext != 'None':
                         # if the license plate bbox is inside the vehicle region
@@ -465,46 +462,12 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
         cv2.putText(img, str(vehicle_id), (br[0] - 30 * len(str(vehicle_id)), tl[1] + 34), font, 1.2,
                     colors[vehicle_id % len(colors)], 2, cv2.LINE_AA)
 
-        # The parameters of model
-        transform_parameters = [-3308070, 246.097, 3487.64, 5196030]
-        VELOCITY_DETECT_TIMESPAN = 4
-
-        if vehicle_id != -1 and ret_tracker.former_detection_box is not None:
-            if frame_id % VELOCITY_DETECT_TIMESPAN == 0:
-                old_y = ret_tracker.former_detection_box[0]
-                old_real_y = pixel_coordinate_transform(old_y, transform_parameters)
-                new_y = (tl[1] + br[1]) / 2
-                new_real_y = pixel_coordinate_transform(new_y, transform_parameters)
-                # The unit of velocity is km/h
-                velocity = int(108 * (new_real_y - old_real_y) / VELOCITY_DETECT_TIMESPAN)
-                print(f"The velocity is {velocity}")
-            else:
-                velocity = ret_tracker.former_detection_box[1]
-
-        else:
-            velocity = None
-
-        if velocity is not None:
-            cv2.putText(img, str(velocity) + " km/h",
-                        (br[0] + 5, tl[1] + 30), font, 1.2, (255, 0, 0), 2, cv2.LINE_AA)
-
         detection_dict = {  # If `-d` specified, dump the detection in a dict
             "tl": tl,
             "br": br,
             "vehicle_id": vehicle_id,
             "tracker": ret_tracker
         } if options.dump else None
-
-        # Store detection box in the tracker.
-        # Use it like this:
-        # if vehicle_id != -1 and ret_tracker.former_detection_box is not None:
-        #     old_tl, old_br = ret_tracker.former_detection_box
-        #     # do something here...
-        # else:
-        #     pass  # the detection gets lost or we are not tracking this vehicle, do other things here.
-        if vehicle_id != -1 and frame_id % VELOCITY_DETECT_TIMESPAN == 0:
-            # Storage the middle-y and the velocity
-            ret_tracker.former_detection_box = ((tl[1] + br[1]) / 2, velocity)
         return ret_tracker, consumed_license_plates, img, detection_dict
 
     def draw_tracker(img, tracker):
@@ -598,7 +561,6 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
         for tracker in trackers:
             if tracker.last_bbox is not None and not tracker.detected:
                 print(f"Undetected tracker: {tracker}!")
-                tracker.former_detection_box = None  # Clear the former detection box if the detection gets lost
                 roi = tracker.roi
                 std = np.std(roi)  # Calculate the standard deviation of the roi,
                 yl = roi.shape[0]  # lower area of the roi and mid area of the roi.
@@ -663,7 +625,7 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
                 # In this situation, directly draw the license plate text under the license plate bbox
                 draw_frame = cv2ImgAddText(draw_frame, record['license'], record['left'],
                                            record['top'] + record['h'] + 1)
-        for tracker in to_be_removed: # Perform the removal
+        for tracker in to_be_removed:  # Perform the removal
             trackers.remove(tracker)
         if options.draw_tracker_bbox:
             # if `-t` specified, draw the tracker bbox on the frame.
