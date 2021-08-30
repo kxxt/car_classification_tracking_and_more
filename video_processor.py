@@ -24,12 +24,18 @@ parser.add_option("-s", "--silent",
                   action="store_true", dest="silent", default=False,
                   help="Hide all cmdline outputs.")
 parser.add_option("-l", "--license-recognition-result", type="string", dest="license_recognition_result_file",
-                  default="license_recognition_result.csv", metavar="FILE",
-                  help="The result csv file of license plate recognition.")
+                  default=None, metavar="FILE",
+                  help="The result csv file of license plate recognition. If not specified, the license recognition "
+                       "is ignored")
 parser.add_option("-d", "--dump",
                   action="store_true", dest="dump", default=False,
                   help="Dump every frame's analysis data into result.json.")
-
+parser.add_option("-c", "--confidence-threshold", type="float", dest="min_confidence",
+                  help="Min detection confidence threshold", metavar="THRESHOLD", default=0.53)
+parser.add_option("-u", "--iou-threshold", type="float", dest="iou_threshold",
+                  help="IoU threshold for detection and tracking bboxes", metavar="THRESHOLD", default=0.40)
+# parser.add_option("-u", "--iou-threshold", type="float", dest="iou_threshold",
+#                   help="IoU threshold for detection and tracking bboxes", metavar="THRESHOLD", default=0.40)
 # Define the color palette.
 colors = [
     (255, 0, 0), (0, 255, 0), (0, 0, 255),
@@ -170,6 +176,9 @@ class TrackerWrapper:
         return f"<Tracker {self.vehicle_id}:{self.category if self.category is not None else '?'}," \
                f" bbox={self.last_bbox}, failure_cnt={self.failure_cnt}, lifetime={self.lifetime}>"
 
+    def __hash__(self):
+        return id(self)
+
     def dict(self):
         """
         Get the dict representation of the tracker's current status.
@@ -205,10 +214,10 @@ def init_new_tracker(img, bbox, vehicle_id):
     return tracker
 
 
-def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
+def init_session(options, font=cv2.FONT_HERSHEY_SIMPLEX):
     """
     Init the video processing session.
-    :param confidence_lowerbound: the confidence lower bound for car detection.
+    :param options: cmdline options
     :param font: the font used in cv2.putText
     :return: a function which takes a frame and returns the processed frame.
     """
@@ -238,17 +247,7 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
     tracking_failure_count_upperbound = 5
 
     # Threshold decide whether the tracker bbox and the detection bbox is the same one.
-    IoU_threshold = 0.40
-
-    def pixel_coordinate_transform(y, param):
-        """
-        Transform the pixel coordinate to the real distance.
-        The unit of the real distance is "meter".
-        :param y: the pixel coordinate y.
-        :param param: the list of 4 paramaters [A, B, C, D] of transform
-        """
-        A, B, C, D = param
-        return (tan((y - D) / A) - C) / B
+    IoU_threshold = options.iou_threshold or 0.40
 
     def update_trackers(img):
         """
@@ -256,7 +255,7 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
         :param img: the input frame.
         :return: None
         """
-        to_be_removed = []  # Store the bad trackers
+        to_be_removed = set()  # Store the bad trackers
         # Update every tracker.
         for index, tracker in enumerate(trackers):
             # bbox: array of x,y,w,h
@@ -275,7 +274,7 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
                 tracker.failure_cnt += 1
                 if tracker.failure_cnt > tracking_failure_count_upperbound:
                     # If a tracker fails too many times, it's not a good tracker. Just delete it.
-                    to_be_removed.append(tracker)
+                    to_be_removed.add(tracker)
 
         # Remove the bad trackers.
         for tracker in to_be_removed:
@@ -528,12 +527,12 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
         normalized_boxes = (box / 800 for box in boxes)  # Normalize the bboxes
         infos = zip(normalized_boxes, confs)  # Zip normalized boxes and their confidence values.
         update_trackers(detection_frame)  # Update all the trackers.
-        useless_trackers = [tracker for tracker in trackers  # collect useless trackers
+        useless_trackers = {tracker for tracker in trackers  # collect useless trackers
                             if tracker.roi is not None and
                             # We think a tracker useless when its region is almost of the same color.
                             # The 20 threshold is just a value from my experience.
-                            np.std(tracker.roi) < 32]
-        useless_trackers.extend(tracker for tracker in trackers if
+                            np.std(tracker.roi) < 32}
+        useless_trackers.update(tracker for tracker in trackers if
                                 tracker.last_bbox is not None and
                                 # Area too small, this kind of tracker should be removed.
                                 tracker.last_bbox[2] * tracker.last_bbox[3] < 1000)
@@ -543,7 +542,7 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
         consumed_license_plates = set()  # Store the indices of the consumed license plates
         detections = []  # Store the detection dicts
         for info in infos:
-            if info[1] < confidence_lowerbound:
+            if info[1] < options.min_confidence:
                 # We do not draw the detection which is below our confidence lower bound.
                 # Just break it, because the array is sorted!
                 break
@@ -557,7 +556,7 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
                     if detection_dict["tracker"] is not None else None  # Dump the tracker as a dict.
                 detections.append(detection_dict)  # Append this detection dict to the list of detections
 
-        to_be_removed = []
+        to_be_removed = set()
         for tracker in trackers:
             if tracker.last_bbox is not None and not tracker.detected:
                 print(f"Undetected tracker: {tracker}!")
@@ -571,18 +570,18 @@ def init_session(confidence_lowerbound=0.53, font=cv2.FONT_HERSHEY_SIMPLEX):
                     # If the standard deviation is too small,
                     # the information contained in the roi is considered too little.
                     # This kind of trackers are removed here.
-                    to_be_removed.append(tracker)
+                    to_be_removed.add(tracker)
                 elif std > 45 and np.std(lower_area) > 40:  # If the roi contains enough information
                     if mid_area_std < 39.98 or tracker.last_bbox[1] < -20 or tracker.last_bbox[0] < -20:
                         # We no longer track a car when it is near the edge of the image.
                         # In this situation, the tracker usually go out of bounds and
                         # the vehicle region is just a part of the whole vehicle.
                         # Thus it's easy to detect this situation and remove corresponding trackers.
-                        to_be_removed.append(tracker)
+                        to_be_removed.add(tracker)
 
                     if roi.shape[0] * roi.shape[1] < 4400:
                         # The area is too small thus it's probably not a vehicle
-                        to_be_removed.append(tracker)
+                        to_be_removed.add(tracker)
                     # Recover the detection box
                     bbox = tracker.last_bbox
 
@@ -658,11 +657,14 @@ if __name__ == "__main__":
     video_writer = cv2.VideoWriter(result_file, video_fourcc, fps_video, (frame_width, frame_height))
 
     # Init video processing session to get the function which processes frames.
-    process = init_session()
+    process = init_session(options)
 
     frame_id = 0  # Store the frame id
     # Load license recognition result data.
-    df = pd.read_csv(options.license_recognition_result_file)
+    if options.license_recognition_result_file:
+        df = pd.read_csv(options.license_recognition_result_file)
+    else:
+        df = pd.DataFrame(data={"frame_id": [], "left": [], "top": [], "w": [], "h": [], "score": [], "license": []})
 
     dump_result = []  # Store analysis results of frames
 
