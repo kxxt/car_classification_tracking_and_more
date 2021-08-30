@@ -6,33 +6,43 @@ PATH = "velocity_detection/result.json"
 SEDAN_LENGTH = 5
 START_PIXEL_Y = 680
 
-with open(PATH) as pre_data:
-    pre_data = pre_data.read()
-    data = json.loads(pre_data)["frames"]
+def read_data(input_file):
+    with open(input_file) as pre_data:
+        pre_data = pre_data.read()
+        data = json.loads(pre_data)["frames"]
+    return data
 
-# regression prepare
+# pick out the sedans in the data
+def pick_out_sedans(data):
+    data1 = []
+    vehicle_ids = set()
+    for frame in data:
+        if frame["detections"]:
+            for vehicle in frame["detections"]:
+                if vehicle["tracker"] is not None and \
+                    vehicle["tracker"]["category"]=="sedan":
+                    data1.append(vehicle)
+                    vehicle_ids.add(vehicle["vehicle_id"])
+    vehicle_ids = list(vehicle_ids)
+    return vehicle_ids, data1
 
-data1 = []
-vehicle_ids = set()
-for frame in data:
-    if frame["detections"]:
-        for vehicle in frame["detections"]:
-            if vehicle["tracker"] is not None and \
-                vehicle["tracker"]["category"]=="sedan":
-                data1.append(vehicle)
-                vehicle_ids.add(vehicle["vehicle_id"])
-vehicle_ids = list(vehicle_ids)
-# print(vehicle_ids)
 
-sedan_pos_infos = []
-for vehicle_id in vehicle_ids:
-    vehicle_pos_info = []
-    for sedan in data1:
-        if sedan["vehicle_id"] == vehicle_id:
-            # bottom_y, top_y
-            vehicle_pos_info.append((sedan["br"][1], sedan["tl"][1]))
-    sedan_pos_infos.append(vehicle_pos_info)
-# print(sedan_pos_infos)
+def sedans_by_ids(vehicle_ids, data1):
+    sedan_pos_infos = []
+    for vehicle_id in vehicle_ids:
+        vehicle_pos_info = []
+        for sedan in data1:
+            if sedan["vehicle_id"] == vehicle_id:
+                # bottom_y, top_y
+                vehicle_pos_info.append((sedan["br"][1], sedan["tl"][1]))
+        sedan_pos_infos.append(vehicle_pos_info)
+    return sedan_pos_infos
+
+data = read_data(PATH)
+vehicle_ids, sedans = pick_out_sedans(data)
+del data
+sedan_pos_infos = sedans_by_ids(vehicle_ids, sedans)
+
 
 training_data = []
 for index, sedan_pos in enumerate(sedan_pos_infos):
@@ -63,7 +73,8 @@ for sedan_pos in sedan_pos_infos:
         for index, pixel_pos in enumerate(pos_record):
             training_data.append([index * SEDAN_LENGTH, pixel_pos])
 
-print(training_data)
+
+# print(training_data)
 training_list = json.dumps(training_data)
 with open("velocity_detection/training_data.json", mode='w') as training_file:
     training_file.write(training_list)
@@ -71,7 +82,6 @@ with open("velocity_detection/training_data.json", mode='w') as training_file:
 training_data = pd.DataFrame(training_data)
 
 training_data.to_csv("velocity_detection/training_data.csv")
-
 
 # data1_json = json.dumps(data1)
 # with open("velocity_detection/regression.json", mode="w") as regression_data:

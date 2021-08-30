@@ -2,13 +2,6 @@ import random, json
 from math import atan as arctan
 
 
-PATH = "velocity_detection/training_data.json"
-
-with open(PATH) as training_file:
-    data = training_file.read()
-
-data = json.loads(data)
-
 def forward(x, params, return_all=False):
     A, B, C, D = params
     z1 = B * x + C
@@ -45,7 +38,9 @@ def backward(x, y, params, eta):
         D - eta * delta2
     ]
 
-def train(data, params, epochs=100000):
+def train(data, epochs=100000, params=None, eta=0.01):
+    if not params:
+        params = [random.gauss(mu=100, sigma=1000) for i in range(4)]
     eta = 0.01
     for epoch in range(epochs):
         for x, y in data:
@@ -56,8 +51,15 @@ def train(data, params, epochs=100000):
     return params
 
 
-params = [random.gauss(mu=100, sigma=1000) for i in range(4)]
-params = train(data, params)
-print(params)
-print(cost(data, params))
+if __name__ == "__main__":
+
+    PATH = "velocity_detection/training_data.json"
+    
+    with open(PATH) as training_file:
+        data = training_file.read()
+    data = json.loads(data)
+
+    params = train(data)
+    print(params)
+    print(cost(data, params))
 
