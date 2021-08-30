@@ -14,6 +14,7 @@ def forward(x, params, return_all=False):
     else:
         return a2
 
+
 def cost(data, params, is_random=False, n=None):
     if is_random:
         using_data = random.shuffle(data)[0:n]
@@ -21,8 +22,9 @@ def cost(data, params, is_random=False, n=None):
         using_data = data
         n = len(data)
 
-    return sum([(forward(using_data[i][0], params) - using_data[i][1]) ** 2 
+    return sum([(forward(using_data[i][0], params) - using_data[i][1]) ** 2
                 for i in range(n)]) / (2 * n)
+
 
 def backward(x, y, params, eta):
     A, B, C, D = params
@@ -32,11 +34,12 @@ def backward(x, y, params, eta):
     delta1 = A * delta2 / (1 + z1 ** 2)
 
     return [
-        A - eta * a1 * delta2, 
-        B - eta * x * delta1, 
-        C - eta * delta1, 
+        A - eta * a1 * delta2,
+        B - eta * x * delta1,
+        C - eta * delta1,
         D - eta * delta2
     ]
+
 
 def train(data, epochs=100000, params=None, eta=0.01):
     if not params:
@@ -52,9 +55,8 @@ def train(data, epochs=100000, params=None, eta=0.01):
 
 
 if __name__ == "__main__":
-
     PATH = "velocity_detection/training_data.json"
-    
+
     with open(PATH) as training_file:
         data = training_file.read()
     data = json.loads(data)
@@ -62,4 +64,3 @@ if __name__ == "__main__":
     params = train(data)
     print(params)
     print(cost(data, params))
-
