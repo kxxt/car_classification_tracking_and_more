@@ -677,21 +677,22 @@ if __name__ == "__main__":
         # Pass the frame and license plate data of that frame to the function
         draw_frame, frame_analysis = process(frame, df[df['frame_id'] == frame_id + 1])
         if options.dump:
-            dump_result.append(frame_analysis | {"frame_id": frame_id})
-        # Write the processed frame
-        video_writer.write(draw_frame)
-        if options.interactive:
-            # If we are in interactive mode, show the video to user.
-            cv2.imshow("Video", draw_frame)
-            cv2.waitKey(20)
-        frame_id += 1  # Increase the frame id counter
-    video_writer.release()  # Release the video file since we've finished processing.
-    if options.dump:
-        with open("result.json", "w") as f:  # Save the analysis result to `result.json`
-            json.dump({
-                "width": frame_width,
-                "height": frame_height,
-                "fps": fps_video,
-                "frames": dump_result
-            }, f)
-    print(f"Processed {frame_id + 1} frames in total!")
+            frame_analysis["frame_id"] = frame_id
+            dump_result.append(frame_analysis)
+            # Write the processed frame
+            video_writer.write(draw_frame)
+            if options.interactive:
+                # If we are in interactive mode, show the video to user.
+                cv2.imshow("Video", draw_frame)
+                cv2.waitKey(20)
+            frame_id += 1  # Increase the frame id counter
+        video_writer.release()  # Release the video file since we've finished processing.
+        if options.dump:
+            with open("result.json", "w") as f:  # Save the analysis result to `result.json`
+                json.dump({
+                    "width": frame_width,
+                    "height": frame_height,
+                    "fps": fps_video,
+                    "frames": dump_result
+                }, f)
+        print(f"Processed {frame_id + 1} frames in total!")
