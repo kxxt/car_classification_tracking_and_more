@@ -695,4 +695,4 @@ if __name__ == "__main__":
                     "fps": fps_video,
                     "frames": dump_result
                 }, f)
-        print(f"Processed {frame_id + 1} frames in total!")
+    print(f"Processed {frame_id + 1} frames in total!")
