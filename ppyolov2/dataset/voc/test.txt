@@ -1,0 +1,3 @@
+./images/0000.jpg ./annotations/0000.xml
+./images/0001.jpg ./annotations/0001.xml
+./images/0002.jpg ./annotations/0002.xml
